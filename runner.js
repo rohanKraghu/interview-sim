@@ -12,6 +12,7 @@ async function python(code, run) {
   }
   const ns = pyodide.globals.get('dict')();
   pyodide.runPython(pySource(code, run), { globals: ns });
+  if (ns.get(run.py) === undefined) throw new Error(`${run.py} is not defined`);
   return {
     tests: () => JSON.parse(ns.get('__tests')(JSON.stringify(run.tests.map(([a]) => a)))),
     time: (args) => ns.get('__timed')(JSON.stringify(args)),

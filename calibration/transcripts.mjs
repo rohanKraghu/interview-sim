@@ -15,8 +15,9 @@ const blank = ['session,grader,dimension,score'];
 for (const f of files) {
   const s = loadSession(f);
   const parts = [`# Session ${s.id}`, `${s.format.label}. Interviewer: ${s.persona.label}. Length ${clock(s.elapsed)}.`];
-  s.problems.forEach((p, i) => parts.push(`## Problem ${i + 1}: ${p.title}`, p.statement, '### Final code', '```', numbered(s.codes[i] || '(empty)'), '```', `Final run: ${evidenceText(p.id, s.results?.[i]) || 'not run'}`));
-  parts.push('## Transcript', '```', renderTranscript(s.log.filter((e) => e.who !== 'event')), '```');
+  const fence = (text) => `\`\`\`\n${text}\n\`\`\``;
+  s.problems.forEach((p, i) => parts.push(`## Problem ${i + 1}: ${p.title}`, p.statement, '### Final code', fence(numbered(s.codes[i] || '(empty)')), `Final run: ${evidenceText(p.id, s.results?.[i]) || 'not run'}`));
+  parts.push('## Transcript', fence(renderTranscript(s.log.filter((e) => e.who !== 'event'))));
   writeFileSync(join(out, `${s.id}.md`), parts.join('\n\n') + '\n');
   for (const d of [...DIMENSIONS, 'verdict']) blank.push(`${s.id},YOUR_NAME,${d},`);
 }
