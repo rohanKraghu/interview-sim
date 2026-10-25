@@ -114,7 +114,7 @@ Pacing: you get a time plan for the current problem. Real interviewers keep the 
 
 Silence: when an event says the candidate has gone quiet, nudge. First nudge: a light check-in, such as asking them to talk you through what they are thinking. If they stay quiet after earlier nudges, give a small concrete hint pointed at their current code, never the full solution. If they are typing but not talking, ask them to narrate as they go.
 
-Measurements: some events carry a MEASURED line from actually running their code: hidden test results, and how the runtime grew as the input doubled (a fitted exponent: about 1 means linear or n log n, about 2 means quadratic). Treat measurements as ground truth over your own reading of the code. When a claim contradicts one, push back with the evidence in plain words ("when I doubled the input, your code took about four times as long"). Do not read out a failing hidden input unless they are stuck; lead them toward it ("what happens when one meeting ends exactly when the next starts?"). Timing cannot tell n from n log n, so never use it to dispute that difference.
+Measurements: some events carry a MEASURED line from actually running their code: hidden test results, and how the runtime grew as the input doubled (a fitted exponent: about 1 means linear or n log n, about 2 means quadratic; linear code can fit as high as 1.5 when its data outgrows the CPU caches). Treat measurements as ground truth over your own reading of the code. When a claim contradicts one, push back with the evidence in plain words ("when I doubled the input, your code took about four times as long"). Do not read out a failing hidden input unless they are stuck; lead them toward it ("what happens when one meeting ends exactly when the next starts?"). Timing cannot tell n from n log n, so never use it to dispute that difference.
 
 Claims: check every claim about time or space complexity, correctness, or edge cases against the actual code and your notes. If a claim is wrong, push back directly: say you are not sure that is right and ask them to walk through the part that breaks it. Do not accept a claim because it sounds confident, and do not drop the point until they correct it or clearly give up. If a claim is right, a short acknowledgment is enough.
 
@@ -176,12 +176,15 @@ export const SCORECARD_SCHEMA = {
   additionalProperties: false,
 };
 
-const SCORECARD_SYSTEM = `You grade a finished live coding interview the way a calibrated interviewer writes feedback. Rubric, 1 to 4 for each dimension:
-- problem_solving: 1 needed the approach handed over, 2 reached it with heavy hints, 3 reached a working approach with light hints, 4 found the optimal approach on their own and weighed alternatives.
+// Shared with human graders (calibration/transcripts.mjs), so people and the model use the same scale.
+export const RUBRIC = `- problem_solving: 1 needed the approach handed over, 2 reached it with heavy hints, 3 reached a working approach with light hints, 4 found the optimal approach on their own and weighed alternatives.
 - code_correctness: 1 does not run or is mostly wrong, 2 major bugs left, 3 minor bugs or a missed edge case, 4 correct on all edge cases.
 - complexity_analysis: 1 none or wrong and not corrected, 2 wrong but corrected after pushback, 3 right with some prompting, 4 right and unprompted, time and space.
 - communication: 1 long silences, 2 talked only when nudged, 3 explained most decisions and asked clarifying questions, 4 narrated throughout, clarified up front, and handled pushback and probes well (held a correct claim with reasoning, gave up a wrong one).
-- testing: 1 none, 2 traced the given example only when asked, 3 traced examples and some edge cases, 4 found their own bugs by testing edge cases.
+- testing: 1 none, 2 traced the given example only when asked, 3 traced examples and some edge cases, 4 found their own bugs by testing edge cases.`;
+
+const SCORECARD_SYSTEM = `You grade a finished live coding interview the way a calibrated interviewer writes feedback. Rubric, 1 to 4 for each dimension:
+${RUBRIC}
 When MEASURED lines or final test results are present, ground code_correctness in the hidden tests and complexity_analysis in whether the candidate's claims matched the measured growth.
 A hint is not an automatic failure: weigh how much help was needed and how well the candidate used it. Interviewer turns in the transcript are labelled (hint, pushback, probe, pace...). Use those labels and the counts.
 Evidence must quote or closely paraphrase the transcript or point at a line of the final code. Grade only what happened.

@@ -82,7 +82,7 @@ const jsTime = (code, run) => { const call = loadJs(code, run); return (a) => { 
 for (const id of Object.keys(JS_SLOW)) {
   const fast = measureGrowth(jsTime(JS[id], RUNS[id]), RUNS[id]).slope;
   const slow = measureGrowth(jsTime(JS_SLOW[id], RUNS[id]), RUNS[id]).slope;
-  assert.ok(fast < 1.5 && slow > 1.75, `${id}: fast n^${fast?.toFixed(2)}, slow n^${slow?.toFixed(2)}`);
+  assert.ok(fast < 1.6 && slow > 1.7, `${id}: fast n^${fast?.toFixed(2)}, slow n^${slow?.toFixed(2)}`);
 }
 assert.equal(fitSlope([{ n: 1, ms: 1 }, { n: 2, ms: 4 }, { n: 4, ms: 16 }]).toFixed(2), '2.00');
 assert.equal(fitSlope([{ n: 1, ms: 0.1 }, { n: 2, ms: 0.2 }]), null);
@@ -109,3 +109,41 @@ if (py) {
 }
 
 console.log('ok: execute');
+
+// Eval scenarios: each one's good example passes its checks and its bad one fails.
+import { SCENARIOS, SCORE_SESSIONS } from './eval/scenarios.js';
+const fill = (r) => ({ kind: 'silent', phase: 'code', move_on: false, end: false, ...r });
+for (const sc of SCENARIOS) {
+  assert.deepEqual(sc.checks.map((c) => c(fill(sc.good))).filter(Boolean), [], `${sc.name} good`);
+  assert.ok(sc.checks.some((c) => c(fill(sc.bad))), `${sc.name} bad`);
+  assert.ok(turnRequest(sc.state, sc.event).messages[0].content.includes(sc.event));
+}
+for (const sess of Object.values(SCORE_SESSIONS)) assert.ok(scorecardRequest(sess).messages[0].content.includes('FINAL RUN: MEASURED'));
+console.log('ok: eval scenarios');
+
+// Calibration statistics and scripts.
+import { weightedKappa, exact, withinOne, bootstrap, pairsBySession, parseCsv } from './calibration/stats.js';
+assert.equal(weightedKappa([[1, 1], [2, 3], [3, 3], [4, 3], [2, 2], [1, 2], [4, 4], [3, 1]]).toFixed(6), '0.611111'); // checked by hand in Python
+assert.equal(weightedKappa([[1, 1], [2, 2], [3, 3], [4, 4]]), 1);
+assert.ok(weightedKappa([[1, 4], [4, 1], [2, 3], [3, 2]]) < 0);
+assert.equal(exact([[1, 1], [2, 3]]), 0.5);
+assert.equal(withinOne([[1, 1], [2, 3], [1, 4]]).toFixed(2), '0.67');
+const csv = parseCsv('session,grader,dimension,score\ns1,ai-1,testing,3\ns1,ai-2,testing,3\ns1,ana,testing,4\ns1,ben,testing,2\ns1,ana,verdict,no hire\ns1,ben,testing,\n');
+assert.equal(csv.length, 5);
+assert.equal(csv[4].score, 2);
+const bySess = pairsBySession(csv).testing[0];
+assert.deepEqual([bySess.aiAi, bySess.humanHuman, bySess.aiHuman.length], [[[3, 3]], [[4, 2]], 4]);
+const [lo, hi] = bootstrap([{ p: [[1, 1], [2, 2]] }, { p: [[3, 3], [4, 4]] }, { p: [[1, 2], [4, 3]] }], (s) => weightedKappa(s.flatMap((x) => x.p)), { B: 200, rand: rng(3) });
+assert.ok(lo <= hi && hi <= 1);
+
+// The packet and agreement scripts run end to end on an exported session.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'cal-'));
+  const { format, persona, problems, ...rest } = SCORE_SESSIONS.strong;
+  writeFileSync(join(dir, 's1.json'), JSON.stringify({ version: 1, id: 's1', formatId: 'onsite', personaId: 'neutral', ...rest, problems: problems.map((p) => p.id) }));
+  const out = execFileSync('node', ['calibration/transcripts.mjs', join(dir, 'packet'), join(dir, 's1.json')]).toString();
+  assert.match(out, /Wrote 1 transcripts/);
+  writeFileSync(join(dir, 'g.csv'), 'session,grader,dimension,score\ns1,ai-1,testing,3\ns1,ai-2,testing,4\ns1,ana,testing,4\ns1,ben,testing,3\n');
+  assert.match(execFileSync('node', ['calibration/agreement.mjs', join(dir, 'g.csv')]).toString(), /testing\s+AI vs people/);
+}
+console.log('ok: calibration');

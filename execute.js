@@ -233,22 +233,27 @@ export function measureGrowth(time, run, { slowRunMs = 300, budgetMs = 3000, max
   return { points, slope: fitSlope(points.filter((p) => !p.error)) };
 }
 
-// Least squares slope of log(time) against log(n), over the four largest sizes.
-// Runs under 1 ms are mostly noise, so they are dropped.
+// Slope of log(time) against log(n) over the four largest sizes: the median of
+// the pairwise slopes, so one garbage-collector pause cannot bend it. Runs under
+// 1 ms are mostly noise, so they are dropped.
 export function fitSlope(points) {
   const pts = points.filter((p) => p.ms >= 1).slice(-4);
   if (pts.length < 3) return null;
-  const xs = pts.map((p) => Math.log(p.n)), ys = pts.map((p) => Math.log(p.ms));
-  const mx = xs.reduce((a, b) => a + b) / xs.length, my = ys.reduce((a, b) => a + b) / ys.length;
-  let num = 0, den = 0;
-  xs.forEach((x, i) => { num += (x - mx) * (ys[i] - my); den += (x - mx) ** 2; });
-  return num / den;
+  const slopes = [];
+  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+    slopes.push(Math.log(pts[j].ms / pts[i].ms) / Math.log(pts[j].n / pts[i].n));
+  }
+  slopes.sort((x, y) => x - y);
+  const m = slopes.length >> 1;
+  return slopes.length % 2 ? slopes[m] : (slopes[m - 1] + slopes[m]) / 2;
 }
 
 export function describeGrowth(slope) {
   if (slope == null) return 'too fast to measure at these sizes';
-  if (slope < 1.5) return 'close to linear (n or n log n; timing cannot separate the two)';
-  if (slope < 1.75) return 'between linear and quadratic (for example n^1.5)';
+  // Linear code on real hardware often fits as high as n^1.5 once its data
+  // outgrows the CPU caches, so the linear band is wide.
+  if (slope < 1.6) return 'close to linear (n or n log n; timing cannot separate the two)';
+  if (slope < 1.85) return 'grows clearly faster than linear (likely n^1.5 or quadratic)';
   if (slope < 2.4) return 'about quadratic';
   return 'worse than quadratic';
 }
