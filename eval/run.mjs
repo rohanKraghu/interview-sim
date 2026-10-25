@@ -12,7 +12,7 @@ const arg = (name, d) => { const i = process.argv.indexOf(`--${name}`); return i
 const repeat = Number(arg('repeat', 3));
 const only = arg('only', '');
 const dry = process.argv.includes('--dry');
-const key = process.env.ANTHROPIC_API_KEY;
+const key = process.env.ANTHROPIC_API_KEY || process.env.INTERVIEW_SIM_API_KEY;
 const picked = SCENARIOS.filter((s) => s.name.includes(only));
 
 if (dry) {
@@ -21,7 +21,7 @@ if (dry) {
   console.log(`${picked.length} scenarios and ${Object.keys(SCORE_SESSIONS).length} scorecard sessions build requests.`);
   process.exit(0);
 }
-if (!key) { console.error('Set ANTHROPIC_API_KEY.'); process.exit(1); }
+if (!key) { console.error('Set ANTHROPIC_API_KEY or INTERVIEW_SIM_API_KEY.'); process.exit(1); }
 
 // A few calls at a time, retrying rate limits and overloads.
 async function call(body) {
