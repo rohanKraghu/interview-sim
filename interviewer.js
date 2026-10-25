@@ -1,5 +1,7 @@
 // Pure interviewer logic: prompts, request bodies, reply parsing, timing rules.
-// No DOM here, so test.mjs can run it under Node.
+// No DOM here, so test.mjs and the eval harness can run it under Node.
+
+import { RUNS, LANGS, evidenceText } from './execute.js';
 
 export const MODEL = 'claude-opus-5-5';
 export const QUIET_SECONDS = 30; // first nudge after this much silence
@@ -53,7 +55,7 @@ export const PROBLEMS = [
     statement:
       'Design a class LRUCache(capacity) with get(key) and put(key, value). get returns the value or -1. put inserts or updates, and if the cache is over capacity it evicts the least recently used key. Both operations should be O(1).',
     notes:
-      'Optimal: hash map plus doubly linked list (or an ordered dict / Map using insertion order). Common wrong claims: "a list with remove() is O(1)" (removing from the middle of an array is O(n)), "a heap of timestamps gives O(1)" (heap ops are O(log n)). Bugs to watch: get not refreshing recency, put on an existing key not refreshing recency or wrongly evicting, capacity 0.',
+      'Optimal: hash map plus doubly linked list (or an ordered dict / Map using insertion order). Common wrong claims: "a list with remove() is O(1)" (removing from the middle of an array is O(n)), "a heap of timestamps gives O(1)" (heap ops are O(log n)). Bugs to watch: get not refreshing recency, put on an existing key not refreshing recency or wrongly evicting, capacity 0. JavaScript caveat: evicting with map.keys().next() is the standard O(1) idea, but V8 scans deleted slots there, so its measured growth can look superlinear at large n. Do not count that against the approach; at most mention it as an aside.',
     followup: 'Add a time-to-live per key.',
     curveball: 'Many threads call get and put at once. What breaks, and what is the simplest correct fix?',
   },
@@ -111,6 +113,8 @@ How a real round runs, and what you do in each phase:
 Pacing: you get a time plan for the current problem. Real interviewers keep the clock. If the candidate is well past a checkpoint, move them along kindly but firmly ("in the interest of time, let's start coding" or "let's leave that and talk about complexity"). Use kind "pace" for that.
 
 Silence: when an event says the candidate has gone quiet, nudge. First nudge: a light check-in, such as asking them to talk you through what they are thinking. If they stay quiet after earlier nudges, give a small concrete hint pointed at their current code, never the full solution. If they are typing but not talking, ask them to narrate as they go.
+
+Measurements: some events carry a MEASURED line from actually running their code: hidden test results, and how the runtime grew as the input doubled (a fitted exponent: about 1 means linear or n log n, about 2 means quadratic). Treat measurements as ground truth over your own reading of the code. When a claim contradicts one, push back with the evidence in plain words ("when I doubled the input, your code took about four times as long"). Do not read out a failing hidden input unless they are stuck; lead them toward it ("what happens when one meeting ends exactly when the next starts?"). Timing cannot tell n from n log n, so never use it to dispute that difference.
 
 Claims: check every claim about time or space complexity, correctness, or edge cases against the actual code and your notes. If a claim is wrong, push back directly: say you are not sure that is right and ask them to walk through the part that breaks it. Do not accept a claim because it sounds confident, and do not drop the point until they correct it or clearly give up. If a claim is right, a short acknowledgment is enough.
 
@@ -178,6 +182,7 @@ const SCORECARD_SYSTEM = `You grade a finished live coding interview the way a c
 - complexity_analysis: 1 none or wrong and not corrected, 2 wrong but corrected after pushback, 3 right with some prompting, 4 right and unprompted, time and space.
 - communication: 1 long silences, 2 talked only when nudged, 3 explained most decisions and asked clarifying questions, 4 narrated throughout, clarified up front, and handled pushback and probes well (held a correct claim with reasoning, gave up a wrong one).
 - testing: 1 none, 2 traced the given example only when asked, 3 traced examples and some edge cases, 4 found their own bugs by testing edge cases.
+When MEASURED lines or final test results are present, ground code_correctness in the hidden tests and complexity_analysis in whether the candidate's claims matched the measured growth.
 A hint is not an automatic failure: weigh how much help was needed and how well the candidate used it. Interviewer turns in the transcript are labelled (hint, pushback, probe, pace...). Use those labels and the counts.
 Evidence must quote or closely paraphrase the transcript or point at a line of the final code. Grade only what happened.
 moments: the three to six turning points of the session, in order. "at" is the transcript timestamp (m:ss). what_happened quotes or paraphrases what the candidate did. better says concretely what a strong candidate would have said or done at that moment, in one or two sentences.
@@ -200,7 +205,7 @@ export function parseClock(text) {
 export function renderTranscript(log) {
   if (!log.length) return '(nothing yet)';
   return log.map((e) => {
-    const who = e.who === 'event' ? 'EVENT' : e.who.toUpperCase() + (e.kind ? ` (${e.kind})` : '');
+    const who = e.who === 'event' ? 'EVENT' : e.who === 'measure' ? 'MEASURED' : e.who.toUpperCase() + (e.kind ? ` (${e.kind})` : '');
     return `[${clock(e.t)}] ${who}: ${e.text}`;
   }).join('\n');
 }
@@ -233,6 +238,8 @@ ${p.notes}
 Follow-up: ${p.followup}
 Curveball: ${p.curveball}
 
+${language(s, p)}
+
 TIME: ${clock(s.elapsed)} elapsed of ${s.format.minutes}:00. This problem started at ${clock(s.problemStart)}. Plan: ${timePlan(s)}.
 
 CANDIDATE'S CODE RIGHT NOW:
@@ -246,6 +253,13 @@ NEW EVENT: ${event}
 Reply with what you say out loud now (empty string to stay quiet) and the labels.`,
     }],
   };
+}
+
+function language(s, p) {
+  const r = RUNS[p.id];
+  if (!r || !LANGS[s.lang] || s.lang === 'other') return 'LANGUAGE: the candidate\'s choice. Their code is not run.';
+  const entry = s.lang === 'python' ? r.py : r.js;
+  return `LANGUAGE: ${LANGS[s.lang].label}. Entry point: ${r.kind === 'ops' ? `class ${entry}` : `${entry}(${r.params})`}. The candidate can run their code against hidden tests.`;
 }
 
 export function sessionStats(s) {
@@ -271,7 +285,8 @@ export function scorecardRequest(s) {
 ${p.statement}
 NOTES: ${p.notes}
 FINAL CODE:
-${(s.codes[i] || '').trim() ? numbered(s.codes[i]) : '(empty)'}`).join('\n\n');
+${(s.codes[i] || '').trim() ? numbered(s.codes[i]) : '(empty)'}
+FINAL RUN: ${evidenceText(p.id, s.results?.[i]) || 'not run'}`).join('\n\n');
   return {
     model: MODEL,
     max_tokens: 12000,
@@ -291,6 +306,27 @@ TRANSCRIPT:
 ${renderTranscript(s.log)}`,
     }],
   };
+}
+
+export async function callClaude(key, body) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2026-10-21',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify(body),
+  });
+  const json = await r.json();
+  if (!r.ok) throw new Error(json.error?.message || `HTTP ${r.status}`);
+  return json;
+}
+
+// Spoken claims worth checking against a measurement.
+export function isComplexityClaim(text) {
+  return /\bo\s*\(|big o|\blinear\b|quadratic|n squared|n log n|log n\b|constant (time|space)|\bo of\b/i.test(text);
 }
 
 export function parseJsonReply(res) {

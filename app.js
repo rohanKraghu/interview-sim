@@ -1,8 +1,10 @@
 import {
-  PROBLEMS, FORMATS, PERSONAS, CHECKIN_SECONDS,
+  PROBLEMS, FORMATS, PERSONAS, CHECKIN_SECONDS, callClaude, isComplexityClaim,
   turnRequest, scorecardRequest, parseJsonReply, isEcho, quietEvent,
   pickProblems, sessionStats, clock, parseClock, numbered,
 } from './interviewer.js';
+import { LANGS, starter, evidenceText, describeGrowth } from './execute.js';
+import { measure } from './measure.js';
 
 const $ = (id) => document.getElementById(id);
 const KEY_STORE = 'interview-sim-key';
@@ -19,24 +21,9 @@ $('problem').add(new Option('Surprise me', ''));
 for (const p of PROBLEMS) $('problem').add(new Option(p.title, p.id));
 for (const [id, f] of Object.entries(FORMATS)) $('format').add(new Option(f.label, id));
 for (const [id, p] of Object.entries(PERSONAS)) $('persona').add(new Option(p.label, id));
+for (const [id, l] of Object.entries(LANGS)) $('lang').add(new Option(l.label, id));
 try { $('key').value = localStorage.getItem(KEY_STORE) || ''; } catch {}
 $('start').onclick = start;
-
-async function callClaude(body) {
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': s.key,
-      'anthropic-version': '2026-10-21',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify(body),
-  });
-  const json = await r.json();
-  if (!r.ok) throw new Error(json.error?.message || `HTTP ${r.status}`);
-  return json;
-}
 
 function start() {
   const key = $('key').value.trim();
@@ -44,10 +31,13 @@ function start() {
   try { localStorage.setItem(KEY_STORE, key); } catch {}
   const format = FORMATS[$('format').value];
   s = {
-    key, format, persona: PERSONAS[$('persona').value],
-    problems: pickProblems($('problem').value, format.problems),
-    idx: 0, code: '', codes: [], log: [], t0: Date.now(), elapsed: 0, problemStart: 0, maxQuiet: 0,
+    id: new Date().toISOString().replace(/\D/g, '').slice(0, 14), key,
+    formatId: $('format').value, format, personaId: $('persona').value, persona: PERSONAS[$('persona').value],
+    lang: $('lang').value, problems: pickProblems($('problem').value, format.problems),
+    idx: 0, code: '', codes: [], results: [], log: [], t0: Date.now(), elapsed: 0, problemStart: 0, maxQuiet: 0,
   };
+  $('run').hidden = !runnable();
+  if (s.lang === 'python') measure(s.problems[0].id, 'python', starter(s.problems[0].id, 'python')); // loads Python early
   showProblem();
   $('setup').hidden = true;
   $('room').hidden = false;
@@ -62,12 +52,37 @@ function showProblem() {
   const p = s.problems[s.idx];
   $('title').textContent = s.problems.length > 1 ? `${s.idx + 1}/${s.problems.length}  ${p.title}` : p.title;
   $('statement').textContent = p.statement;
-  $('editor').value = s.code = codeAtCheck = '';
+  $('editor').value = s.code = codeAtCheck = starter(p.id, s.lang);
+  $('ran').textContent = '';
   $('editor').focus();
 }
 
-function nextProblem() {
+const runnable = () => s.lang !== 'other';
+
+// Runs the current code; logs the evidence for the interviewer and returns it.
+async function measureNow() {
+  if (!runnable()) return '';
+  $('ran').textContent = 'Running...';
+  const p = s.problems[s.idx], m = await measure(p.id, s.lang, s.code);
+  s.results[s.idx] = m;
+  $('ran').textContent = !m ? '' : m.error ? `Could not run: ${m.error}`
+    : `${m.tests.passed} of ${m.tests.total} hidden tests passed`;
+  const text = evidenceText(p.id, m);
+  if (text) log('measure', text);
+  return text;
+}
+
+$('run').onclick = async () => {
+  if (finished || $('ran').textContent === 'Running...') return;
+  const text = await measureNow();
+  if (text) turn(`The candidate ran their code. ${text}`);
+};
+
+async function nextProblem() {
   s.codes[s.idx] = s.code;
+  busy = true; // no nudges about the old problem while its final code runs
+  await measureNow();
+  busy = false;
   s.idx++;
   s.problemStart = Date.now() - s.t0;
   showProblem();
@@ -76,7 +91,7 @@ function nextProblem() {
 
 function log(who, text, kind) {
   s.log.push({ who, text, kind, t: Date.now() - s.t0, code: s.code, p: s.idx });
-  if (who === 'event') return;
+  if (who === 'event' || who === 'measure') return;
   const line = document.createElement('p');
   line.className = who;
   line.textContent = text;
@@ -92,7 +107,7 @@ async function turn(event) {
   s.elapsed = Date.now() - s.t0;
   let advance = false;
   try {
-    const reply = parseJsonReply(await callClaude(turnRequest(s, event)));
+    const reply = parseJsonReply(await callClaude(s.key, turnRequest(s, event)));
     log('event', event);
     $('phase').textContent = reply.phase;
     // Don't talk over a candidate who started speaking while we were thinking.
@@ -180,6 +195,11 @@ function candidateSaid(text) {
   lastSpeech = Date.now();
   nudges = 0;
   log('candidate', text);
+  // A complexity claim gets checked against a fresh measurement before the interviewer answers.
+  if (isComplexityClaim(text) && runnable() && s.code.trim()) {
+    measureNow().then((evidence) => turn(`The candidate just spoke (last CANDIDATE line) and made a complexity claim. ${evidence}`));
+    return;
+  }
   turn('The candidate just spoke (last CANDIDATE line).');
 }
 
@@ -208,17 +228,21 @@ async function finish() {
   speechSynthesis?.cancel();
   s.codes[s.idx] = s.code;
   s.elapsed = Date.now() - s.t0;
+  $('card-body').textContent = 'Running your final code...';
   $('room').hidden = true;
   $('review').hidden = false;
+  await measureNow();
   $('card-body').textContent = 'Writing your scorecard...';
   renderReplay([]);
   try {
-    const card = parseJsonReply(await callClaude(scorecardRequest(s)));
+    const card = parseJsonReply(await callClaude(s.key, scorecardRequest(s)));
+    s.scorecard = card;
     renderCard(card);
     renderReplay(card.moments);
   } catch (e) {
     $('card-body').textContent = `Could not write the scorecard: ${e.message}`;
   }
+  $('download').hidden = false;
 }
 
 const el = (tag, text = '', cls) => { const n = document.createElement(tag); n.textContent = text; if (cls) n.className = cls; return n; };
@@ -228,12 +252,17 @@ function renderCard(c) {
   const body = $('card-body');
   body.replaceChildren(el('p', c.verdict, 'verdict'), el('p', c.summary));
   const stats = el('div', '', 'stats');
-  for (const [label, v] of [['you talked', `${st.talkShare}%`], ['words/min', st.wordsPerMinute], ['longest silence', `${st.longestSilence}s`], ['hints', st.hints], ['pushbacks', st.pushbacks]]) {
+  const runs = s.results.filter((m) => m?.tests);
+  const tests = runs.length ? [['hidden tests', `${runs.reduce((a, m) => a + m.tests.passed, 0)}/${runs.reduce((a, m) => a + m.tests.total, 0)}`]] : [];
+  for (const [label, v] of [['you talked', `${st.talkShare}%`], ['words/min', st.wordsPerMinute], ['longest silence', `${st.longestSilence}s`], ['hints', st.hints], ['pushbacks', st.pushbacks], ...tests]) {
     const box = el('div');
     box.append(el('b', String(v)), el('span', label));
     stats.append(box);
   }
   body.append(stats);
+  s.results.forEach((m, i) => {
+    if (m?.tests) body.append(el('p', `${s.problems[i].title}: ${m.tests.passed}/${m.tests.total} tests, runtime grew about n^${m.slope?.toFixed(1) ?? '?'}, ${describeGrowth(m.slope)}.`, 'evidence'));
+  });
   for (const x of c.scores) {
     const row = el('div', '', 'score');
     row.append(el('span', x.dimension.replace('_', ' '), 'dim'), el('span', `${x.score}/4`, `pts s${x.score}`), el('p', x.evidence, 'evidence'));
@@ -255,6 +284,7 @@ function renderReplay(moments) {
   const said = s.log.filter((e) => e.who !== 'event');
   for (const e of said) {
     while (n < notes.length && notes[n].t <= e.t) list.append(noteEl(notes[n++]));
+    if (e.who === 'measure') { list.append(el('p', e.text, 'measured')); continue; }
     const row = el('button', '', `moment ${e.who}`);
     row.append(el('span', clock(e.t), 'at'), el('span', e.text));
     if (e.kind) row.append(el('span', e.kind, 'tag'));
@@ -277,5 +307,16 @@ function showCode(e, row) {
   $('code-at').textContent = `Code at ${clock(e.t)}, ${s.problems[e.p].title}`;
   $('code-view').textContent = e.code.trim() ? numbered(e.code) : '(empty)';
 }
+
+// Everything needed to regrade or hand-grade the session later (no API key).
+$('download').onclick = () => {
+  const { key, format, persona, problems, t0, ...rest } = s;
+  const data = { version: 1, ...rest, problems: problems.map((p) => p.id) };
+  const a = el('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+  a.download = `interview-${s.id}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
 
 function status(text) { $('status').textContent = text; }
