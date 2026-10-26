@@ -50,6 +50,11 @@
   #caption { min-height: 1.5em; color: var(--muted); font-style: italic; margin: 0; }
   #say { width: 100%; }
   #status { color: var(--warn); font-size: 14px; margin: 0; }
+  .code { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+  .runbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-top: 1px solid var(--line); background: var(--code-bg); }
+  #ran { color: var(--muted); font-size: 14px; }
+  .measured { margin: 4px 0 4px 52px; color: var(--muted); font-size: 13px; }
+  #download { margin-top: 12px; }
   #editor { width: 100%; height: 100%; resize: none; border: 0; outline: 0; padding: 16px;
     background: var(--code-bg); color: var(--ink); font: 15px/1.6 ui-monospace, Menlo, Consolas, monospace; tab-size: 4; }
 
@@ -100,6 +105,7 @@
   <label>Format <select id="format"></select></label>
   <label>First problem <select id="problem"></select></label>
   <label>Interviewer <select id="persona"></select></label>
+  <label>Language <select id="lang"></select></label>
   <label>Anthropic API key <input id="key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
   <p style="font-size:14px">The key stays in this browser and is sent only to api.anthropic.com.</p>
   <button id="start">Start interview</button>
@@ -123,13 +129,17 @@
         <p id="status"></p>
       </div>
     </aside>
-    <textarea id="editor" spellcheck="false" placeholder="Write your solution here, in any language." aria-label="Code editor"></textarea>
+    <div class="code">
+      <textarea id="editor" spellcheck="false" placeholder="Write your solution here." aria-label="Code editor"></textarea>
+      <div class="runbar"><button id="run" class="quiet">Run tests</button><span id="ran" aria-live="polite"></span></div>
+    </div>
   </main>
 </section>
 
 <section id="review" hidden>
   <div class="review-left">
     <div id="card-body"></div>
+    <button id="download" class="quiet" hidden>Download session</button>
     <h3>Replay</h3>
     <div id="timeline"></div>
   </div>
